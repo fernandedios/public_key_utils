@@ -12,7 +12,19 @@ defmodule PublicKeyUtils.Key do
   as the RSA primes, or the name of the EC curve.
   """
 
-  hrl = [from_lib: "public_key/include/public_key.hrl"]
+  :application.load(:public_key)
+
+  pubkey_dir =
+    case :code.lib_dir(:public_key) do
+      {:error, _} ->
+        Path.join(:code.root_dir() |> List.to_string(), "lib/public_key-1.17.1")
+
+      dir when is_list(dir) ->
+        List.to_string(dir)
+    end
+
+  hrl = [from: Path.join(pubkey_dir, "include/public_key.hrl")]
+
   defrecord :subject_public_key_info, :SubjectPublicKeyInfo, extract(:SubjectPublicKeyInfo, hrl)
   defrecord :rsa_private_key, :RSAPrivateKey, extract(:RSAPrivateKey, hrl)
   defrecord :rsa_public_key, :RSAPublicKey, extract(:RSAPublicKey, hrl)
@@ -57,122 +69,167 @@ defmodule PublicKeyUtils.Key do
     with {:ok, key} <- _load_key(key) do
       case key do
         rsa_private_key() ->
-          {:ok, %__MODULE__{
-            algorithm: :rsa,
-            private: true,
-            key: key
-          }}
+          {:ok,
+           %__MODULE__{
+             algorithm: :rsa,
+             private: true,
+             key: key
+           }}
+
         rsa_public_key() ->
-          {:ok, %__MODULE__{
-            algorithm: :rsa,
-            key: key
-          }}
+          {:ok,
+           %__MODULE__{
+             algorithm: :rsa,
+             key: key
+           }}
+
         dsa_private_key() ->
-          {:ok, %__MODULE__{
-            algorithm: :dsa,
-            private: true,
-            key: key
-          }}
+          {:ok,
+           %__MODULE__{
+             algorithm: :dsa,
+             private: true,
+             key: key
+           }}
+
         {int, dss_parms()} when is_integer(int) ->
-          {:ok, %__MODULE__{
-            algorithm: :dsa,
-            key: key
-          }}
+          {:ok,
+           %__MODULE__{
+             algorithm: :dsa,
+             key: key
+           }}
+
         ec_private_key() ->
-          {:ok, %__MODULE__{
-            algorithm: :ec,
-            key: key,
-            private: true
-          }}
+          {:ok,
+           %__MODULE__{
+             algorithm: :ec,
+             key: key,
+             private: true
+           }}
+
         {ec_point(), ec_parameters()} ->
-          {:ok, %__MODULE__{
-            algorithm: :ec,
-            key: key
-          }}
+          {:ok,
+           %__MODULE__{
+             algorithm: :ec,
+             key: key
+           }}
+
         {ec_point() = point, {:namedCurve, curve}} ->
           case to_oid(curve) do
             :unknown ->
-              {:ok, %__MODULE__{
-                algorithm: :ec,
-                key: key
-              }}
+              {:ok,
+               %__MODULE__{
+                 algorithm: :ec,
+                 key: key
+               }}
+
             curve ->
-              {:ok, %__MODULE__{
-                algorithm: :ec,
-                key: {point, {:namedCurve, curve}}
-              }}
+              {:ok,
+               %__MODULE__{
+                 algorithm: :ec,
+                 key: {point, {:namedCurve, curve}}
+               }}
           end
       end
     end
   end
+
   def _load_key({:error, _} = error), do: error
   def _load_key(rsa_private_key() = key), do: {:ok, key}
   def _load_key(rsa_public_key() = key), do: {:ok, key}
   def _load_key(dsa_private_key() = key), do: {:ok, key}
   def _load_key({int, dss_parms()} = key) when is_integer(int), do: {:ok, key}
-  def _load_key(ec_private_key(parameters: {:ecParameters, params}) = key), do: {:ok, ec_private_key(key, parameters: params)}
+
+  def _load_key(ec_private_key(parameters: {:ecParameters, params}) = key),
+    do: {:ok, ec_private_key(key, parameters: params)}
+
   def _load_key(ec_private_key() = key), do: {:ok, key}
   def _load_key({ec_point(), ec_parameters()} = key), do: {:ok, key}
   def _load_key({ec_point(), {:namedCurve, _}} = key), do: {:ok, key}
-  def _load_key({ec_point() = point, {:ecParameters, ec_parameters() = params}}), do: {:ok, {point, params}}
-  def _load_key({ec_point() = point, {:ecParameters, {:namedCurve, _} = params}}), do: {:ok, {point, params}}
+
+  def _load_key({ec_point() = point, {:ecParameters, ec_parameters() = params}}),
+    do: {:ok, {point, params}}
+
+  def _load_key({ec_point() = point, {:ecParameters, {:namedCurve, _} = params}}),
+    do: {:ok, {point, params}}
+
   def _load_key({:PrivateKeyInfo, _, :not_encrypted} = key) do
     :public_key.pem_entry_decode(key)
     |> _load_key
   end
+
   def _load_key({:SubjectPublicKeyInfo, _, :not_encrypted} = key) do
     :public_key.pem_entry_decode(key)
     |> _load_key
   end
-  def _load_key(subject_public_key_info(algorithm: {:AlgorithmIdentifier, oid, parms}, subjectPublicKey: key)) do
+
+  def _load_key(
+        subject_public_key_info(
+          algorithm: {:AlgorithmIdentifier, oid, parms},
+          subjectPublicKey: key
+        )
+      ) do
     case from_oid(oid) do
       :rsaEncryption ->
         :public_key.der_decode(:RSAPublicKey, key)
+
       :"id-dsa" ->
         {
           :public_key.der_decode(:DSAPublicKey, key),
           :public_key.der_decode(:"Dss-Parms", parms)
         }
+
       :"id-ecPublicKey" ->
         parms =
           case parms do
-            <<6>> <> _ = oid -> # OID
+            # OID
+            <<6>> <> _ = oid ->
               {{6, oid}, _} = :asn1rt_nif.decode_ber_tlv(oid)
+
               {:namedCurve,
-                decode_binary_oid(oid)
-                |> from_oid
-              }
+               decode_binary_oid(oid)
+               |> from_oid}
+
             _ ->
               case :public_key.der_decode(:ECParameters, parms) do
-                {:ecParameters, ec_parameters() = parms} -> parms
+                {:ecParameters, ec_parameters() = parms} ->
+                  parms
+
                 ec_parameters() = parms ->
                   parms
               end
           end
+
         {{:ECPoint, key}, parms}
     end
     |> _load_key
   end
+
   def _load_key({key_type, der, :not_encrypted} = entry) when is_atom(key_type) do
     case :public_key.pem_entry_decode(entry) |> _load_key do
       {:ok, _} = key -> key
       _ -> :public_key.der_decode(key_type, der) |> _load_key
     end
   end
+
   def _load_key(private_key_info(privateKeyAlgorithm: key_type, privateKey: bin)) do
     key_type =
       case key_type do
         {:PrivateKeyInfo_privateKeyAlgorithm, oid, _} ->
           name = from_oid(oid)
+
           case name do
             :rsaEncryption -> :RSAPrivateKey
             other -> other
           end
-        other -> other
+
+        other ->
+          other
       end
+
     :public_key.der_decode(key_type, bin)
     |> _load_key
   end
+
   def _load_key(pem_or_der_or_ssh) when is_binary(pem_or_der_or_ssh) do
     case :public_key.pem_decode(pem_or_der_or_ssh) do
       [] ->
@@ -181,8 +238,15 @@ defmodule PublicKeyUtils.Key do
           key
         rescue
           _ ->
-            [:RSAPrivateKey, :RSAPublicKey, :DSAPrivateKey, :DSAPublicKey, :ECPrivateKey, :SubjectPublicKeyInfo]
-            |> Enum.find_value({:error, :invalid_key}, fn(key_type) ->
+            [
+              :RSAPrivateKey,
+              :RSAPublicKey,
+              :DSAPrivateKey,
+              :DSAPublicKey,
+              :ECPrivateKey,
+              :SubjectPublicKeyInfo
+            ]
+            |> Enum.find_value({:error, :invalid_key}, fn key_type ->
               try do
                 :public_key.der_decode(key_type, pem_or_der_or_ssh)
               rescue
@@ -190,16 +254,20 @@ defmodule PublicKeyUtils.Key do
               end
             end)
         end
-      keys -> keys
+
+      keys ->
+        keys
     end
     |> _load_key
   end
+
   def _load_key([head | rest]) do
     case _load_key(head) do
       {:error, _} -> _load_key(rest)
       good -> good
     end
   end
+
   def _load_key(_), do: {:error, :invalid_key}
 
   @doc """
@@ -210,9 +278,11 @@ defmodule PublicKeyUtils.Key do
   def encrypt(data, key)
   def encrypt(_data, %__MODULE__{algorithm: :dsa}), do: {:error, :dsa_can_not_encrypt}
   def encrypt(_data, %__MODULE__{algorithm: :ec}), do: {:error, :ec_can_not_encrypt}
+
   def encrypt(data, %__MODULE__{key: key, private: true}) do
     :public_key.encrypt_private(data, key)
   end
+
   def encrypt(data, %__MODULE__{key: key, private: false}) do
     :public_key.encrypt_public(data, key)
   end
@@ -225,6 +295,7 @@ defmodule PublicKeyUtils.Key do
   def decrypt(data, key)
   def decrypt(_data, %__MODULE__{algorithm: :dsa}), do: {:error, :dsa_can_not_decrypt}
   def decrypt(_data, %__MODULE__{algorithm: :ec}), do: {:error, :ec_can_not_decrypt}
+
   def decrypt(data, %__MODULE__{key: key, private: true}) do
     try do
       {:ok, :public_key.decrypt_private(data, key)}
@@ -232,6 +303,7 @@ defmodule PublicKeyUtils.Key do
       e in ErlangError -> {:error, e.original}
     end
   end
+
   def decrypt(data, %__MODULE__{key: key, private: false}) do
     try do
       {:ok, :public_key.decrypt_public(data, key)}
@@ -248,7 +320,10 @@ defmodule PublicKeyUtils.Key do
   DSA is only supported with :sha
   """
   def sign(data, key, hash \\ :sha)
-  def sign(_, %__MODULE__{algorithm: :dsa}, hash) when hash != :sha, do: {:error, :invalid_hash_for_dsa}
+
+  def sign(_, %__MODULE__{algorithm: :dsa}, hash) when hash != :sha,
+    do: {:error, :invalid_hash_for_dsa}
+
   def sign(data, %__MODULE__{private: true, key: key}, hash) do
     :public_key.sign(data, hash, key)
   end
@@ -263,7 +338,10 @@ defmodule PublicKeyUtils.Key do
   Returns true/false
   """
   def verify(data, signature, key, hash \\ :sha)
-  def verify(_, _, %__MODULE__{algorithm: :dsa}, hash) when hash != :sha, do: {:error, :invalid_hash_for_dsa}
+
+  def verify(_, _, %__MODULE__{algorithm: :dsa}, hash) when hash != :sha,
+    do: {:error, :invalid_hash_for_dsa}
+
   def verify(data, signature, %__MODULE__{private: false, key: key}, hash) do
     :public_key.verify(data, hash, signature, key)
   end
@@ -276,13 +354,31 @@ defmodule PublicKeyUtils.Key do
   Convert a private key to a public key. Useful when you want to encrypt with the public key side of
   and existing private key.
   """
-  def public(%__MODULE__{private: true, algorithm: :ec, key: ec_private_key(publicKey: public, parameters: params)}) do
+  def public(%__MODULE__{
+        private: true,
+        algorithm: :ec,
+        key: ec_private_key(publicKey: public, parameters: params)
+      }) do
     %__MODULE__{key: {{:ECPoint, public}, params}, algorithm: :ec, private: false}
   end
-  def public(%__MODULE__{private: true, algorithm: :rsa, key: rsa_private_key(modulus: modulus, publicExponent: public_exponent)}) do
-    %__MODULE__{key: rsa_public_key(modulus: modulus, publicExponent: public_exponent), algorithm: :rsa, private: false}
+
+  def public(%__MODULE__{
+        private: true,
+        algorithm: :rsa,
+        key: rsa_private_key(modulus: modulus, publicExponent: public_exponent)
+      }) do
+    %__MODULE__{
+      key: rsa_public_key(modulus: modulus, publicExponent: public_exponent),
+      algorithm: :rsa,
+      private: false
+    }
   end
-  def public(%__MODULE__{private: true, algorithm: :dsa, key: dsa_private_key(y: y, p: p, q: q, g: g)}) do
+
+  def public(%__MODULE__{
+        private: true,
+        algorithm: :dsa,
+        key: dsa_private_key(y: y, p: p, q: q, g: g)
+      }) do
     %__MODULE__{key: {y, dss_parms(p: p, q: q, g: g)}, algorithm: :dsa, private: false}
   end
 end

@@ -19,7 +19,18 @@ defmodule PublicKeyUtils.Certificate do
     :fingerprints
   ]
 
-  hrl = [from: Path.join(:code.lib_dir(:public_key), "include/public_key.hrl")]
+  :application.load(:public_key)
+
+  pubkey_dir =
+    case :code.lib_dir(:public_key) do
+      {:error, _} ->
+        Path.join(:code.root_dir() |> List.to_string(), "lib/public_key-1.17.1")
+
+      dir when is_list(dir) ->
+        List.to_string(dir)
+    end
+
+  hrl = [from: Path.join(pubkey_dir, "include/public_key.hrl")]
   defrecord :certificate, :Certificate, extract(:Certificate, hrl)
   defrecord :tbs_certificate, :TBSCertificate, extract(:TBSCertificate, hrl)
 
