@@ -19,7 +19,7 @@ defmodule PublicKeyUtils.Certificate do
     :fingerprints
   ]
 
-  hrl = [from_lib: "public_key/include/public_key.hrl"]
+  hrl = [from: Path.join(:code.lib_dir(:public_key), "include/public_key.hrl")]
   defrecord :certificate, :Certificate, extract(:Certificate, hrl)
   defrecord :tbs_certificate, :TBSCertificate, extract(:TBSCertificate, hrl)
 
@@ -32,28 +32,31 @@ defmodule PublicKeyUtils.Certificate do
   def load(certificates), do: _load_certificates(certificates, [])
   defp _load_certificates([], []), do: {:error, :no_certificates}
   defp _load_certificates([], found), do: {:ok, List.flatten(found)}
+
   defp _load_certificates([certificate | rest], found) do
     case _load_certificates(certificate, found) do
       {:ok, certificates} -> _load_certificates(rest, [found, certificates])
-      _ ->_load_certificates(rest, found)
+      _ -> _load_certificates(rest, found)
     end
   end
+
   defp _load_certificates({:Certificate, der, :not_encrypted}, certs) do
     found =
       try do
         case :public_key.der_decode(:Certificate, der) do
           certificate(
-            tbsCertificate: tbs_certificate(
-              version: version,
-              serialNumber: serial_number,
-              issuer: issuer,
-              validity: validity,
-              subject: subject,
-              subjectPublicKeyInfo: subject_public_key_info,
-              issuerUniqueID: issuer_unique_id,
-              subjectUniqueID: subject_unique_id,
-              extensions: extensions
-            ),
+            tbsCertificate:
+              tbs_certificate(
+                version: version,
+                serialNumber: serial_number,
+                issuer: issuer,
+                validity: validity,
+                subject: subject,
+                subjectPublicKeyInfo: subject_public_key_info,
+                issuerUniqueID: issuer_unique_id,
+                subjectUniqueID: subject_unique_id,
+                extensions: extensions
+              ),
             signatureAlgorithm: signature_algorithm,
             signature: signature
           ) = cert ->
@@ -75,13 +78,17 @@ defmodule PublicKeyUtils.Certificate do
                 fingerprints: fingerprint(der)
               }
             ]
-          _ -> certs
+
+          _ ->
+            certs
         end
       catch
         _ -> certs
       end
+
     _load_certificates([], found)
   end
+
   defp _load_certificates(bin, certs) when is_binary(bin) do
     case :public_key.pem_decode(bin) do
       [] ->
@@ -89,7 +96,9 @@ defmodule PublicKeyUtils.Certificate do
           {:ok, bin} -> _load_certificates({:Certificate, bin, :not_encrypted}, certs)
           _ -> _load_certificates({:Certificate, bin, :not_encrypted}, certs)
         end
-      entries -> _load_certificates(entries, certs)
+
+      entries ->
+        _load_certificates(entries, certs)
     end
   end
 
@@ -99,12 +108,12 @@ defmodule PublicKeyUtils.Certificate do
 
   def pem(list) when is_list(list) do
     {:ok,
-      Enum.map(list, fn(cert) ->
-        :public_key.pem_entry_encode(:Certificate, cert.certificate)
-      end)
-      |> :public_key.pem_encode
-    }
+     Enum.map(list, fn cert ->
+       :public_key.pem_entry_encode(:Certificate, cert.certificate)
+     end)
+     |> :public_key.pem_encode()}
   end
+
   def pem(%__MODULE__{} = cert), do: pem([cert])
 
   defp fingerprint(der) do
@@ -112,7 +121,8 @@ defmodule PublicKeyUtils.Certificate do
   end
 
   defp decode(nil), do: nil
-  defp decode(<<len, str :: binary>>) when byte_size(str) == len, do: str
+  defp decode(<<len, str::binary>>) when byte_size(str) == len, do: str
+
   defp decode(bin) when is_binary(bin) do
     case :asn1rt_nif.decode_ber_tlv(bin) do
       {{6, oid}, _} -> from_oid(oid)
@@ -121,28 +131,34 @@ defmodule PublicKeyUtils.Certificate do
       _ -> String.trim(bin)
     end
   end
+
   defp decode({:SubjectPublicKeyInfo, _, _} = key) do
     case PublicKeyUtils.Key.load(key) do
       {:ok, key} -> key
     end
   end
+
   defp decode({:AttributeTypeAndValue, oid, value}), do: {from_oid(oid), decode(value)}
   defp decode({:AlgorithmIdentifier, oid, _}), do: from_oid(oid)
   defp decode({:Extension, oid, _, raw}), do: {from_oid(oid), raw}
   defp decode({:rdnSequence, list}), do: List.flatten(decode(list))
   defp decode({:Validity, from, to}), do: [not_before: decode(from), not_on_or_after: decode(to)]
   defp decode(list) when is_list(list), do: Enum.map(list, &decode/1)
+
   defp decode({:utcTime, time}) do
     parse_time(time)
   end
+
   defp decode(oid), do: from_oid(oid)
 
-  defp parse_time([y1,y2,mo1,mo2,d1,d2,h1,h2,m1,m2,s1,s2,tz] = time) do
-    isoish = <<?2,?0,y1,y2,?-,mo1,mo2,?-,d1,d2,?T,h1,h2,?:,m1,m2,?:,s1,s2,tz>>
+  defp parse_time([y1, y2, mo1, mo2, d1, d2, h1, h2, m1, m2, s1, s2, tz] = time) do
+    isoish = <<?2, ?0, y1, y2, ?-, mo1, mo2, ?-, d1, d2, ?T, h1, h2, ?:, m1, m2, ?:, s1, s2, tz>>
+
     case NaiveDateTime.from_iso8601(isoish) do
       {:ok, time} -> time
       _ -> {:unknown, to_string(time)}
     end
   end
+
   defp parse_time(time), do: {:unknown, to_string(time)}
 end
