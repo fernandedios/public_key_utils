@@ -24,7 +24,7 @@ defmodule PublicKeyUtils.Certificate do
   pubkey_dir =
     case :code.lib_dir(:public_key) do
       {:error, _} ->
-        Path.join(:code.root_dir() |> List.to_string(), "lib/public_key-1.17.1")
+        Path.join(:code.root_dir() |> List.to_string(), "lib/public_key-1.15.1.6")
 
       dir when is_list(dir) ->
         List.to_string(dir)
